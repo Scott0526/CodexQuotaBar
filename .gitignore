@@ -1,0 +1,9 @@
+.DS_Store
+*.app/
+dist/
+work/
+*.log
+*.sample.txt
+*.ips
+.env
+.env.*
