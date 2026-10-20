@@ -34,11 +34,16 @@ The app checks the CLI bundled with ChatGPT.app / Codex.app, Homebrew locations,
 
 ## Install / 安装
 
+[Download the latest release / 下载最新版本](https://github.com/Scott0526/CodexQuotaBar/releases/latest) · [Build status / 自动构建](https://github.com/Scott0526/CodexQuotaBar/actions)
+
+
 ### Build locally / 本机构建
 
 Download or clone this repository, open Terminal in its folder, then run:
 
 ```sh
+git clone https://github.com/Scott0526/CodexQuotaBar.git
+cd CodexQuotaBar
 chmod +x build.sh
 ./build.sh
 ```
