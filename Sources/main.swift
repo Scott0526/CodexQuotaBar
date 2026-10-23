@@ -59,6 +59,13 @@ final class QuotaReader {
         return (bundled + path).first { FileManager.default.isExecutableFile(atPath: $0) }
     }
     static func read() throws -> Bucket {
+        let limits: Limits = try request("account/rateLimits/read")
+        guard let bucket = limits.codex, bucket.primary != nil || bucket.secondary != nil else {
+            throw QuotaError.message("该账号暂未返回 Codex 额度。请确认使用 ChatGPT 账号登录。")
+        }
+        return bucket
+    }
+    static func request<T: Decodable>(_ method: String) throws -> T {
         guard let cli = executable() else { throw QuotaError.message("未找到 Codex CLI，请先安装或打开 Codex / ChatGPT。") }
         let p = Process(); let input = Pipe(); let output = Pipe()
         p.executableURL = URL(fileURLWithPath: cli)
@@ -109,13 +116,9 @@ final class QuotaReader {
                 }
                 if id == 1 {
                     try send(["method": "initialized", "params": [:]])
-                    try send(["id": 2, "method": "account/rateLimits/read"])
+                    try send(["id": 2, "method": method, "params": [:]])
                 } else if id == 2, let result = message["result"] {
-                    let limits = try JSONDecoder().decode(Limits.self, from: JSONSerialization.data(withJSONObject: result))
-                    guard let bucket = limits.codex, bucket.primary != nil || bucket.secondary != nil else {
-                        throw QuotaError.message("该账号暂未返回 Codex 额度。请确认使用 ChatGPT 账号登录。")
-                    }
-                    return bucket
+                    return try JSONDecoder().decode(T.self, from: JSONSerialization.data(withJSONObject: result))
                 }
             }
         }
@@ -271,6 +274,11 @@ struct QuotaCard: View {
 }
 struct QuotaPopover: View {
     @ObservedObject var store: QuotaStore
+    @ObservedObject var usage: UsageStore
+    @State private var dailyTab = false
+    init(store: QuotaStore, usage: UsageStore, dailyInitially: Bool = false) {
+        self.store = store; self.usage = usage; _dailyTab = State(initialValue: dailyInitially)
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -283,6 +291,13 @@ struct QuotaPopover: View {
                 if store.loading { ProgressView().controlSize(.small) }
                 else { Circle().fill(store.error == nil ? Color.green : Color.orange).frame(width: 6, height: 6) }
             }
+            Picker("面板", selection: $dailyTab) {
+                Text("额度").tag(false)
+                Text("Daily Usage").tag(true)
+            }.pickerStyle(.segmented).labelsHidden()
+            if dailyTab {
+                DailyUsageView(usage: usage)
+            } else {
             Picker("百分比", selection: $store.showUsed) {
                 Text("剩余额度").tag(false)
                 Text("已用额度").tag(true)
@@ -300,6 +315,7 @@ struct QuotaPopover: View {
                 Spacer()
                 Button(action: { store.refresh() }) { Image(systemName: "arrow.clockwise") }.buttonStyle(.plain).disabled(store.loading).help("立即刷新")
             }
+            }
             Divider()
             HStack {
                 Toggle("登录时启动", isOn: Binding(get: { store.login }, set: { _ in store.toggleLogin() })).toggleStyle(.checkbox).font(.system(size: 11))
@@ -307,11 +323,12 @@ struct QuotaPopover: View {
                 Button("退出") { NSApp.terminate(nil) }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
             }
             Text("当前 ChatGPT 账号的 Codex 配额").font(.system(size: 10)).foregroundStyle(.tertiary)
-        }.padding(18).frame(width: 330)
+        }.padding(18).frame(width: 390).fixedSize(horizontal: false, vertical: true)
     }
 }
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     let store = QuotaStore()
+    let usage = UsageStore()
     var item: NSStatusItem!
     var renderer: QuotaStatusRenderer!
     private var appearanceObservation: NSKeyValueObservation?
@@ -336,9 +353,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             }
         }
         popover.behavior = .transient; popover.animates = true; popover.delegate = self
-        popover.contentViewController = NSHostingController(rootView: QuotaPopover(store: store))
+        popover.contentViewController = NSHostingController(rootView: QuotaPopover(store: store, usage: usage))
         store.changed = { [weak self] in self?.update() }
         store.start()
+        let introduceDaily = !UserDefaults.standard.bool(forKey: "dailyUsageIntroduced")
+        if introduceDaily { UserDefaults.standard.set(true, forKey: "dailyUsageIntroduced") }
+        if CommandLine.arguments.contains("--show") || introduceDaily {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { if !self.popover.isShown { self.toggle() } }
+        }
     }
     func scheduleImageUpdate() {
         guard !imageUpdateScheduled else { return }
@@ -395,6 +417,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
 }
 
+if let index = CommandLine.arguments.firstIndex(of: "--preview-usage"), CommandLine.arguments.count > index + 1 {
+    _ = NSApplication.shared
+    let store = QuotaStore(); let usage = UsageStore(preview: true)
+    store.bucket = Bucket(primary: QuotaWindow(usedPercent: 34, windowDurationMins: 300, resetsAt: Date().addingTimeInterval(5400).timeIntervalSince1970), secondary: QuotaWindow(usedPercent: 20, windowDurationMins: 10080, resetsAt: Date().addingTimeInterval(300000).timeIntervalSince1970), planType: "plus", limitId: "codex")
+    let now = Date(); let calendar = Calendar.current; let catalog = try PricingCatalog.load()
+    var records: [TokenRecord] = []
+    for i in 0..<30 {
+        let date = calendar.date(byAdding: .day, value: -i, to: now)!
+        records.append(TokenRecord(key: "sample-sol-\(i)", date: date, model: "gpt-6.1-sol", speed: "standard", amounts: TokenAmounts(input: Int64(400000 + (i * 71937) % 1400000), cached: 300000, output: Int64(10000 + i * 413))))
+        records.append(TokenRecord(key: "sample-astra-\(i)", date: date, model: "gpt-6-astra", speed: "standard", amounts: TokenAmounts(input: 90000, cached: 60000, output: Int64(3000 + i * 57))))
+    }
+    usage.local = LocalUsageReport.aggregate(records: records, catalog: catalog, now: now)
+    let view = QuotaPopover(store: store, usage: usage, dailyInitially: true).environment(\.colorScheme, .light).background(Color(nsColor: .windowBackgroundColor))
+    try MainActor.assumeIsolated {
+        let hosting = NSHostingView(rootView: view)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 390, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = hosting
+        let size = hosting.fittingSize
+        window.setContentSize(size)
+        hosting.frame = NSRect(origin: .zero, size: size)
+        window.orderFront(nil)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        hosting.layoutSubtreeIfNeeded(); window.displayIfNeeded()
+        guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { fatalError("Preview rendering failed") }
+        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+        window.orderOut(nil)
+        print("Saved synthetic-data Daily Usage preview")
+    }
+    exit(0)
+}
 if let index = CommandLine.arguments.firstIndex(of: "--render-check"), CommandLine.arguments.count > index + 1 {
     _ = NSApplication.shared
     let store = QuotaStore()
@@ -416,6 +469,22 @@ if let index = CommandLine.arguments.firstIndex(of: "--render-check"), CommandLi
     exit(0)
 }
 signal(SIGPIPE, SIG_IGN)
+if CommandLine.arguments.contains("--usage-probe") {
+    do {
+        let scanner = UsageLogScanner()
+        let catalog = try PricingCatalog.load()
+        let start = Date()
+        let first = try scanner.scan(catalog: catalog)
+        let seconds = Date().timeIntervalSince(start)
+        let second = try scanner.scan(catalog: catalog)
+        print("Local logs: \(first.files) files; first scan \(String(format: "%.3f", seconds))s / \(first.scannedBytes) bytes; second scan \(second.scannedBytes) bytes")
+        print("Today: \(first.today.amounts.total) tokens; API equivalent \(UsageFormat.money(first.today.costValue)); unpriced \(first.today.unpriced); skipped \(first.skipped)")
+        print("Models: \(first.today.models.keys.sorted().joined(separator: ", "))")
+        let account: AccountUsage = try QuotaReader.request("account/usage/read")
+        print("Account daily buckets: \(account.dailyUsageBuckets?.count ?? 0); latest date: \(account.dailyUsageBuckets?.last?.startDate ?? "unavailable")")
+        exit(0)
+    } catch { fputs("\(error.localizedDescription)\n", stderr); exit(1) }
+}
 if CommandLine.arguments.contains("--probe") {
     do {
         let b = try QuotaReader.read()

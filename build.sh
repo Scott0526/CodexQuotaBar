@@ -13,8 +13,8 @@ BUILD_DIR="$(mktemp -d)"
 trap 'rm -rf "$BUILD_DIR"' EXIT
 for architecture in "${architectures[@]}"; do
   xcrun swiftc -O -target "${architecture}-apple-macosx13.0" \
-    -framework AppKit -framework SwiftUI -framework ServiceManagement \
-    Sources/main.swift -o "$BUILD_DIR/CodexQuotaBar-$architecture"
+    -framework AppKit -framework SwiftUI -framework ServiceManagement -framework Charts \
+    Sources/*.swift -o "$BUILD_DIR/CodexQuotaBar-$architecture"
 done
 if (( ${#architectures[@]} > 1 )); then
   xcrun lipo -create "$BUILD_DIR"/CodexQuotaBar-* -output "$APP/Contents/MacOS/CodexQuotaBar"
@@ -30,12 +30,13 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>CodexQuotaBar</string>
 <key>CFBundleDisplayName</key><string>Codex 额度</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.0.0</string>
-<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleShortVersionString</key><string>1.1.0</string>
+<key>CFBundleVersion</key><string>2</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
+cp Resources/prices.json "$APP/Contents/Resources/prices.json"
 codesign --force --sign - "$APP"
 printf 'Built %s\n' "$APP"

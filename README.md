@@ -18,6 +18,9 @@ Shows remaining quota for the short and weekly windows of your ChatGPT account's
 - Click for reset times, last update, manual refresh, remaining/used display and optional launch at login.
 - Refreshes about once a minute and after wake. Cached images prevent continuous menu bar redraws.
 - Both sides of the bar have 8 pt text spacing; overall width follows the percentage text.
+- Daily Usage tab: local-day tokens, API-equivalent USD estimates, 30-day interactive token/cost chart and per-model breakdown.
+- Account-wide daily token buckets are shown separately from local session estimates, with server dates and possible reporting delay.
+- Local logs are read only when the usage panel opens or on manual refresh; unchanged files are cached and only appended bytes are parsed.
 - Failed refreshes retain the last successful in-memory snapshot, with gray bars and a dot indicator.
 
 双行紧凑显示；点击查看详情，可切换剩余/已用并设置登录启动。更新失败会明确标记旧数据。
@@ -62,6 +65,7 @@ Tagged releases include a universal ZIP for Apple Silicon and Intel Macs, plus a
 
 ```sh
 ./build.sh --universal
+./test.sh
 ./CodexQuotaBar.app/Contents/MacOS/CodexQuotaBar --self-test
 ./CodexQuotaBar.app/Contents/MacOS/CodexQuotaBar --render-check /tmp/codex-quota-render.png
 # Optional: read your real quota. Requires your own Codex login.
@@ -74,7 +78,7 @@ Tagged releases include a universal ZIP for Apple Silicon and Intel Macs, plus a
 
 The app launches the locally installed `codex app-server` over stdio, initializes the connection and calls [`account/rateLimits/read`](https://learn.chatgpt.com/docs/app-server). The CLI uses its existing local authentication to contact OpenAI. No model inference or new conversation is started.
 
-The app does not directly read or copy credential files, save quota snapshots to disk, or send data to the project's author. It stores display and onboarding preferences locally. Refresh/render events in the macOS system log contain status messages, not quota values or credentials. `--probe` intentionally prints quota percentages and reset times to your terminal.
+The app does not directly read or copy credential files, save quota snapshots to disk, or send data to the project's author. The Daily Usage tab also reads local `CODEX_HOME/sessions/**/rollout-*.jsonl` metadata and token events (default: `~/.codex/sessions`). It keeps parsed token records and file offsets in memory, not conversation text. No usage logs or token totals are sent to the project's author. It stores display and onboarding preferences locally. Refresh/render events in the macOS system log contain status messages, not quota values or credentials. `--probe` intentionally prints quota percentages and reset times to your terminal.
 
 只使用本机 Codex CLI 已有登录状态读取额度；不会调用模型，不会向项目作者发送数据。额度仅保存在运行内存中。切换账号后请刷新；读取失败时仍可能显示带错误标记的上次成功数据。到达重置时间后不会自行假定额度已恢复，最终以服务端返回为准。
 
@@ -88,3 +92,20 @@ The app does not directly read or copy credential files, save quota snapshots to
 ## License
 
 MIT. Contributions and issues are welcome. Do not include tokens, account identifiers or private logs in public issues.
+
+## Daily Usage / 每日用量
+
+![Daily Usage — synthetic demonstration data](docs/daily-usage-preview.png)
+
+Click the menu bar item, then choose Daily Usage. Hover or click a bar to inspect a day; switch between Tokens and estimated cost. Scroll within this tab for model breakdown and calculation details.
+
+- Local detail: 30 local calendar days, including today. Input includes cache reads; output includes reasoning. Neither is added a second time. Logs may include earlier accounts using the same Codex home and do not cover every device/cloud session.
+- Account daily totals: read via `account/usage/read`, separately displayed because this endpoint has no model or input/output split and may lag. Its date-only buckets keep the server date labels.
+- Cost: current published Standard API price equivalents in USD, with explicit speed tiers when logged and per-request long-context rates. Missing speed is assumed Standard. The price snapshot date is shown in the UI; this is not historical billing or subscription charges. Regional/tool fees and account-specific discounts are excluded.
+- Unsupported models/speed tiers, cache-write usage or missing counters are not silently assigned a price; unknown-cost records remain in token totals and partial estimates are marked. The price table is `Resources/prices.json` and can be updated from its linked official source.
+- Repeated snapshots and copied fork history are deduplicated. Only complete appended lines are consumed; truncation/replacement invalidates the file cache. Initial cumulative counts without a per-request value are skipped, not billed as today's usage.
+- Opening the panel refreshes local data at most once per 30 seconds and server history at most once per five minutes. Manual refresh bypasses these intervals. There is no background timer scanning session logs.
+
+费用是 API 现价等价估算，不是 ChatGPT 订阅扣费。本机明细与账号总量分开展示，不能混用两种范围来计算“账号总费用”。初次加载扫描最近有更新的日志，之后只读取新增内容；缓存只驻留内存。
+
+Run `./test.sh` for synthetic-fixture checks covering cache reads, reasoning, duplicate/fork events, partial lines, local midnight, model switches, long context, speed tiers, unknown prices, counter resets and cache invalidation. Optional `--usage-probe` prints a local performance/usage summary and the server bucket count; it requires your own login. `--preview-usage /absolute/path/preview.png` renders a synthetic-data preview without contacting the service.
